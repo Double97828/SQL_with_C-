@@ -1,0 +1,145 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "util.h"
+
+EXEC SQL INCLUDE SQLCA; 
+
+EXEC SQL BEGIN DECLARE SECTION;
+   char db[6] = "cs348";
+   char title[25], name[10], apat[10],year[4],publisher[10],type[20];
+   short aid,pubid,volume,number, appears_in,start,end,record[30000];
+EXEC SQL END DECLARE SECTION;
+
+void print_author(){
+   EXEC SQL DECLARE sort_author CURSOR FOR 
+      select a.name from
+         wrote w left join author a on w.author = a.aid 
+      where publication = :pubid
+      order by name asc;
+
+   EXEC SQL OPEN sort_author;
+
+   EXEC SQL WHENEVER NOT FOUND GO TO end;
+
+   printf("Authors: ");
+   EXEC SQL FETCH sort_author INTO :name;
+
+   for (;;) {
+     printf (" %s",name);
+     EXEC SQL FETCH sort_author INTO :name;
+     if (SQLCODE == 100)break;
+     printf (",");
+   }
+
+   end:
+   EXEC SQL CLOSE sort_author;
+
+    printf ("\n");
+}
+
+int main(int argc, char *argv[]) {
+   if (argc!=2) {
+      printf("Usage: bibauthor <pattern>\n");
+      exit(1);
+   };
+
+   EXEC SQL WHENEVER SQLERROR  GO TO error;
+
+   EXEC SQL CONNECT TO :db;
+
+   strncpy(apat,argv[1],8);
+     
+   EXEC SQL DECLARE C CURSOR FOR 
+   select *, 
+   case when pubid in (select pubid from book) then 'BOOK'
+   when pubid in (select pubid from article) then 'ARTICLE'
+   when pubid in (select pubid from journal) then 'JOURNAL' 
+   when pubid in (select pubid from proceedings) then 'PROCEEDINGS'
+   end as type
+    from(
+      select * from ( 
+         select coalesce(myt2.name,'')as name ,myt2.pubid,myt2.year,pub.title from(
+            select aid, name,pubid,year from (
+               select a.aid, w.publication,a.name from 
+               wrote w left join author a on w.author = a.aid ) as myt right join (
+                  select * from( 
+                     select a.pubid,z.year from publication a left join (
+                         select art.pubid, 
+                           case  when j.pubid = art.appears_in then j.year 
+                                 when proc.pubid = art.appears_in then proc.year 
+                         end as year  
+                        from article art  
+                        left join proceedings proc on art.appears_in = proc.pubid 
+                        left join journal j on art.appears_in = j.pubid ) z 
+                     on a.pubid = z.pubid 
+                     union 
+                     select pubid,year from book 
+                     union 
+                     select pubid,year from journal 
+                     union 
+                     select pubid,year from proceedings ) 
+                  where year is not null ) 
+            as myt1 on myt.publication = myt1.pubid)as myt2 
+            left join publication pub on myt2.pubid = pub.pubid
+            order by year desc,name asc )
+            where name like: apat or name = '')
+            where pubid in (
+               select appears_in from article where pubid in(
+                  select publication from wrote where author in (
+                     select aid from author where name like:apat))) or name like:apat ;
+
+
+   EXEC SQL OPEN C;
+   EXEC SQL WHENEVER NOT FOUND GO TO end;
+   for (;;) {
+     EXEC SQL FETCH C INTO :name, :pubid, :year, :title, :type;
+
+
+     if (record[pubid] == 0){
+     record[pubid]++;
+     printf("Pubid:  %d\n", pubid);
+     printf("Type:  %s\n", type);
+     printf("Title:  %s\n", title);
+     
+     if (type[0]== 'B'){
+        EXEC SQL SELECT b.publisher INTO: publisher from book b
+        where b.pubid =:pubid;
+        print_author();
+        printf("Publisher:  %s\n", publisher);
+        printf("Year:  %s\n\n", year);
+     }else if (type[0]== 'J'){
+        EXEC SQL SELECT j.volume, j.number INTO: volume,:number from journal j
+        where j.pubid =:pubid;
+        printf("Volume:  %d\n", volume);
+        printf("Number:  %d\n", number);
+        printf("Year:  %s\n\n", year);
+     }else if (type[0]== 'P'){
+        printf("Year:  %s\n\n", year);
+     }else if(type[0] == 'A'){
+        EXEC SQL SELECT a.appears_in, a.startpage,a.endpage INTO: appears_in,:start, :end from article a 
+        where a.pubid =:pubid;
+        print_author();
+        printf("In:  %d\n", appears_in);
+        printf("Pages:  %d--%d\n\n", start,end);
+
+     }
+     }
+   };
+
+end:
+   EXEC SQL CLOSE C;
+   EXEC SQL COMMIT;
+   EXEC SQL CONNECT RESET;
+
+   exit(0);
+
+error:
+   check_error("My error",&sqlca);
+
+   EXEC SQL WHENEVER SQLERROR CONTINUE;
+   EXEC SQL ROLLBACK;
+   EXEC SQL CONNECT reset;
+
+   exit(1);
+}

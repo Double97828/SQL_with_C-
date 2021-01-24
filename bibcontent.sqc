@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "util.h"
+
+EXEC SQL INCLUDE SQLCA; 
+
+EXEC SQL BEGIN DECLARE SECTION;
+   char db[6] = "cs348";
+   char title[25], name[10], apat[10];
+   short aid,input_pid,pubid,appears_in,startpage,endpage;
+EXEC SQL END DECLARE SECTION;
+
+void print_author(){
+   EXEC SQL DECLARE sort_author CURSOR FOR 
+      select a.name from
+         wrote w left join author a on w.author = a.aid 
+      where publication = :pubid
+      order by name asc;
+
+   EXEC SQL OPEN sort_author;
+
+   EXEC SQL WHENEVER NOT FOUND GO TO end;
+
+   printf("Authors: ");
+   EXEC SQL FETCH sort_author INTO :name;
+
+   for (;;) {
+     printf (" %s",name);
+     EXEC SQL FETCH sort_author INTO :name;
+     if (SQLCODE == 100)break;
+     printf (",");
+   }
+
+   end:
+   EXEC SQL CLOSE sort_author;
+
+    printf ("\n");
+}
+
+int main(int argc, char *argv[]) {
+   if (argc!=2) {
+      printf("Usage: bibcontent <pattern>\n");
+      exit(1);
+   };
+
+   EXEC SQL WHENEVER SQLERROR  GO TO error;
+
+   EXEC SQL CONNECT TO :db;
+
+   strncpy(apat,argv[1],8);
+
+   input_pid = atoi(apat);
+     
+   EXEC SQL DECLARE C CURSOR FOR 
+      SELECT a.*, p.title from article a
+      left join publication p on p.pubid = a.pubid where a.appears_in =:input_pid
+      order by a.startpage;
+
+   EXEC SQL OPEN C;
+   EXEC SQL WHENEVER NOT FOUND GO TO end;
+
+   for (;;) {
+     EXEC SQL FETCH C INTO :pubid, :appears_in, :startpage, :endpage, :title;
+     printf("Pubid:  %d\n", pubid);
+     printf("Type:  ARTICLE\n");
+     printf("Title:  %s\n", title);
+     print_author();
+     printf("In:  %d\n", appears_in);
+     printf("Pages:  %d--%d\n\n", startpage,endpage);
+   };
+
+end:
+   EXEC SQL CLOSE C;
+   EXEC SQL COMMIT;
+   EXEC SQL CONNECT RESET;
+
+   exit(0);
+
+error:
+   check_error("My error",&sqlca);
+
+   EXEC SQL WHENEVER SQLERROR CONTINUE;
+   EXEC SQL ROLLBACK;
+   EXEC SQL CONNECT reset;
+
+   exit(1);
+}
